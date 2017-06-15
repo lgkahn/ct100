@@ -14,8 +14,16 @@ v 5 something they did in they new setheat and cool setpoints even in stock dela
 to 30 secs before it registers changed this to 500 ms.
 v 6 lgk. added status tile with last upddate time for current temp so you can see at a glance it is updating without checking logs.
 note: there is a new input preferernce toffset which defaults to -5 and you must set yourself.
-v 7 forgot to add the preference section added now and input fx to fix the fact that smartthings defaults are not working
-and a value can be null.
+v 7 forgot to add the preference section added now.
+v8 turn on extra debugging to figure out why direct sets are failing from routines
+v9 fixed issue with routines not setting temps.. it was silently timing out with no error.. needed to up delay times
+v 10 figured out how to do time without user input timezone and handles daylight saving correctly.
+v 11 fix for change in how labels are handled.
+
+even the stock one with a delay time would only set the heat setpoint from a routine (first call) and would timeout on the cool
+one.. I upped the delays to 45 seconds and it seems to set both. Then i passed in a smaller delay from the toggle buttons so you
+still can go up or down a temp in 1/2 sec.. otherwise it would only update every 30 or 45 secs etc.
+
 
 
 
@@ -50,7 +58,6 @@ metadata {
 
 
 preferences {
- input("tzOffset", "number", title: "Time zone offset +/-x?", required: false, range: "-12..14", defaultValue: -5, description: "Time Zone Offset ie -5.")  
   }
 
 	// simulator metadata
@@ -119,7 +126,7 @@ preferences {
 
    valueTile("coolingSetpoint", "device.coolingSetpoint", inactiveLabel: false) 
     	  {
-          state "default", label:'Cool\n${currentValue}°F', unit:"F",
+          state "default", label:'Cool\n ${currentValue}°F', unit:"F",
            backgroundColors:
            [
             [value: 31, color: "#153591"],
@@ -134,7 +141,7 @@ preferences {
 
      valueTile("heatingSetpoint", "device.heatingSetpoint", inactiveLabel: false) 
     	{
-      state "default", label:'Heat\n${currentValue}°F', unit:"F",
+      state "default", label:'Heat\n ${currentValue}°F', unit:"F",
        backgroundColors:
        [
         [value: 31, color: "#153591"],
@@ -177,7 +184,7 @@ preferences {
         */
         
 		valueTile("humidity", "device.humidity", inactiveLabel: false) {
-			state "humidity", label:'Humidity\n${currentValue}%', unit:"",
+			state "humidity", label:'Humidity\n ${currentValue}%', unit:"",
               icon: "http://cdn.device-icons.smartthings.com/Weather/weather12-icn@2x.png",
                backgroundColors : [
                     [value: 01, color: "#724529"],
@@ -190,7 +197,7 @@ preferences {
 		}
         
 		valueTile("battery", "device.battery", inactiveLabel: false) {
-			state "battery", label:'Battery\n${currentValue}%', unit:"",
+			state "battery", label:'Battery\n ${currentValue}%', unit:"",
              backgroundColors : [
                     [value: 20, color: "#720000"],
                     [value: 40, color: "#724529"],
@@ -227,6 +234,8 @@ preferences {
 
 def parse(String description)
 {
+ //log.debug "in parse desc = $description"
+ 
 	def result = []
 	if (description == "updated") {
 	} else {
@@ -308,14 +317,8 @@ log.debug "in sensor multilevel v2 cmd type = $cmd.sensorType";
 		map.unit = getTemperatureScale()
 		map.value = convertTemperatureIfNeeded(cmd.scaledSensorValue, cmd.scale == 1 ? "F" : "C", cmd.precision)
         
-        if (settings.tzOffset == null)
- 		   settings.tzOffset = -5
- 
-        def now = new Date()
-        def tf = new java.text.SimpleDateFormat("MM/dd/yyyy h:mm a")
-        tf.setTimeZone(TimeZone.getTimeZone("GMT${settings.tzOffset}"))
-        def newtime = "${tf.format(now)}" as String   
-        sendEvent(name: "lastUpdate", value: newtime, descriptionText: "Last Update: $newtime")
+        def now = new Date().format('MM/dd/yyyy h:mm a',location.timeZone)
+        sendEvent(name: "lastUpdate", value: now, descriptionText: "Last Update: $now")
 
 	} else if (cmd.sensorType == 5) {
 		map.name = "humidity"
@@ -518,11 +521,11 @@ def quickSetHeat(degrees) {
 	setHeatingSetpoint(degrees, 500)
 }
 
-def setHeatingSetpoint(degrees, delay = 500) {
+def setHeatingSetpoint(degrees, delay = 40000) {
 	setHeatingSetpoint(degrees.toDouble(), delay)
 }
 
-def setHeatingSetpoint(Double degrees, Integer delay = 500) {
+def setHeatingSetpoint(Double degrees, Integer delay = 40000) {
 	log.debug "setHeatingSetpoint($degrees, $delay)"
 	def deviceScale = state.scale ?: 1
 	def deviceScaleString = deviceScale == 2 ? "C" : "F"
@@ -538,6 +541,7 @@ def setHeatingSetpoint(Double degrees, Integer delay = 500) {
 		convertedDegrees = degrees
 	}
 
+  log.debug "calling thermostatSetpointV1.thermostatSetpointSet (heat type = 1) with degrees = $convertedDegrees delay = $delay"
 	delayBetween([
 		zwave.thermostatSetpointV1.thermostatSetpointSet(setpointType: 1, scale: deviceScale, precision: p, scaledValue: convertedDegrees).format(),
 		zwave.thermostatSetpointV1.thermostatSetpointGet(setpointType: 1).format()
@@ -548,11 +552,11 @@ def quickSetCool(degrees) {
 	setCoolingSetpoint(degrees, 500)
 }
 
-def setCoolingSetpoint(degrees, delay = 500) {
+def setCoolingSetpoint(degrees, delay = 40000) {
 	setCoolingSetpoint(degrees.toDouble(), delay)
 }
 
-def setCoolingSetpoint(Double degrees, Integer delay = 500) {
+def setCoolingSetpoint(Double degrees, Integer delay = 40000) {
 	log.debug "setCoolingSetpoint($degrees, $delay)"
 	def deviceScale = state.scale ?: 1
 	def deviceScaleString = deviceScale == 2 ? "C" : "F"
@@ -568,6 +572,7 @@ def setCoolingSetpoint(Double degrees, Integer delay = 500) {
 		convertedDegrees = degrees
 	}
 
+   log.debug "calling thermostatSetpointV1.thermostatSetpointSet (cool type=2) with degrees = $convertedDegrees delay = $delay"
 	delayBetween([
 		zwave.thermostatSetpointV1.thermostatSetpointSet(setpointType: 2, scale: deviceScale, precision: p,	 scaledValue: convertedDegrees).format(),
 		zwave.thermostatSetpointV1.thermostatSetpointGet(setpointType: 2).format()
@@ -576,11 +581,6 @@ def setCoolingSetpoint(Double degrees, Integer delay = 500) {
 
 def configure() {
 
- if (settings.tzOffset == null)
-  {
-    settings.tzOffset = "-5"
-    log.debug "tzOffset was null ... set to -5!"
-  }
 
 	delayBetween([
 		zwave.thermostatModeV2.thermostatModeSupportedGet().format(),
@@ -752,7 +752,7 @@ def coolLevelUp(){
       nextLevel = 99
     }
     log.debug "Setting cool set point up to: ${nextLevel}"
-    setCoolingSetpoint(nextLevel)
+    setCoolingSetpoint(nextLevel,500)
 }
 
 def coolLevelDown(){
@@ -762,7 +762,7 @@ def coolLevelDown(){
       nextLevel = 50
     }
     log.debug "Setting cool set point down to: ${nextLevel}"
-    setCoolingSetpoint(nextLevel)
+    setCoolingSetpoint(nextLevel,500)
 }
 
 def heatLevelUp(){
@@ -772,7 +772,7 @@ def heatLevelUp(){
       nextLevel = 90
     }
     log.debug "Setting heat set point up to: ${nextLevel}"
-    setHeatingSetpoint(nextLevel)
+    setHeatingSetpoint(nextLevel,500)
 }
 
 def heatLevelDown(){
@@ -782,15 +782,11 @@ def heatLevelDown(){
       nextLevel = 40
     }
     log.debug "Setting heat set point down to: ${nextLevel}"
-    setHeatingSetpoint(nextLevel)
+    setHeatingSetpoint(nextLevel,500)
 }
 
 def input()
 {
- if (settings.tzOffset == null)
-  {
-    settings.tzOffset = "-5"
-    log.debug "tzOffset was null ... set to -5!"
-  }
+ 
 }
 
